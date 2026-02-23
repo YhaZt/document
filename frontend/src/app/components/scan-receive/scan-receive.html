@@ -1,0 +1,168 @@
+<div class="scan-container">
+  <header class="scan-header">
+    <a routerLink="/" class="back-link">&larr; Back to Documents</a>
+    <h1>Scan &amp; Receive Document</h1>
+    <p class="subtitle">Offices scan the QR code to confirm they have received the document</p>
+  </header>
+
+  <!-- ============ STEP 1: SCAN INPUT ============ -->
+  <div class="card scan-input-card">
+    <h2>1. Scan or Enter Tracking Code</h2>
+
+    <div class="scan-row">
+      <input
+        type="text"
+        placeholder="Enter or scan tracking code (e.g. CARPEL-20260223-A3F7)"
+        [ngModel]="scanCode()"
+        (ngModelChange)="scanCode.set($event)"
+        (keyup.enter)="lookupDocument()"
+        class="scan-input"
+      />
+      <button class="btn btn-primary" (click)="lookupDocument()" [disabled]="isProcessing()">
+        {{ isProcessing() ? 'Looking up...' : 'Look Up' }}
+      </button>
+    </div>
+
+    <div class="office-select">
+      <label>Your Office:</label>
+      <select [ngModel]="selectedOffice()" (ngModelChange)="selectedOffice.set($event)">
+        <option value="">-- Select Your Office --</option>
+        @for (o of offices(); track o) {
+          <option [value]="o">{{ o }}</option>
+        }
+      </select>
+    </div>
+  </div>
+
+  <!-- ============ VOIDED QR ERROR ============ -->
+  @if (isVoidedError()) {
+    <div class="card voided-card">
+      <div class="voided-icon">&#10007;</div>
+      <h2>QR Code Voided</h2>
+      <p>This QR code has been <strong>voided / shaded</strong> and is no longer valid.</p>
+      <p>The document cannot be received or tracked using this QR code.</p>
+      <button class="btn" (click)="resetAll()">Scan Another</button>
+    </div>
+  }
+
+  <!-- ============ GENERIC ERROR ============ -->
+  @if (scanError() && !isVoidedError()) {
+    <div class="card error-card">
+      <p class="error-text">{{ scanError() }}</p>
+      <button class="btn" (click)="resetState()">Try Again</button>
+    </div>
+  }
+
+  <!-- ============ DOCUMENT FOUND ============ -->
+  @if (scannedDoc(); as doc) {
+    @if (!scanSuccess()) {
+      <!-- Show document info and confirm button -->
+      <div class="card document-preview">
+        <h2>2. Confirm Receipt</h2>
+
+        <div class="preview-header">
+          <h3>{{ doc.title }}</h3>
+          <span class="badge" [ngClass]="getStatusClass(doc.status)">{{ doc.status }}</span>
+        </div>
+
+        <div class="preview-grid">
+          <div><strong>Tracking Code</strong><span class="mono">{{ doc.trackingCode }}</span></div>
+          <div><strong>Document Type</strong><span>{{ doc.documentType }}</span></div>
+          <div><strong>Origin Office</strong><span>{{ doc.originOffice }}</span></div>
+          <div><strong>Current Office</strong><span>{{ doc.currentOffice || 'Completed' }}</span></div>
+          <div><strong>Date</strong><span>{{ doc.date | date:'mediumDate' }}</span></div>
+          <div><strong>Priority</strong><span>{{ doc.priorityLevel }}</span></div>
+        </div>
+
+        @if (doc.description) {
+          <p class="preview-desc"><strong>Description:</strong> {{ doc.description }}</p>
+        }
+
+        <!-- Routing Trail -->
+        <div class="trail">
+          <h4>Routing Progress</h4>
+          @for (step of doc.routingTrail; track step.order) {
+            <div class="trail-step" [ngClass]="{'step-done': step.status === 'Received', 'step-active': step.status === 'Pending'}">
+              <span class="step-order">{{ step.order }}</span>
+              <div class="step-info">
+                <span class="step-office">{{ step.office }}</span>
+                <span class="badge badge-sm" [ngClass]="{'badge-success': step.status === 'Received', 'badge-warning': step.status === 'Pending', 'badge-default': step.status === 'Waiting'}">
+                  {{ step.status }}
+                </span>
+                @if (step.receivedAt) {
+                  <small>Received: {{ step.receivedAt | date:'short' }}</small>
+                }
+              </div>
+            </div>
+          }
+        </div>
+
+        <!-- Receive action -->
+        @if (doc.currentOffice) {
+          <div class="receive-action">
+            <p class="receive-note">
+              Receiving as: <strong>{{ selectedOffice() || '(select your office above)' }}</strong>
+              &rarr; Expected office: <strong>{{ doc.currentOffice }}</strong>
+            </p>
+            <div class="receive-row">
+              <input type="text" placeholder="Remarks (optional)" [ngModel]="remarks()" (ngModelChange)="remarks.set($event)" />
+              <button
+                class="btn btn-success"
+                (click)="confirmReceive()"
+                [disabled]="isProcessing() || !selectedOffice()"
+              >
+                {{ isProcessing() ? 'Processing...' : 'Confirm Received' }}
+              </button>
+            </div>
+          </div>
+        } @else {
+          <div class="receive-action">
+            <p class="completed-note">This document has completed its routing.</p>
+          </div>
+        }
+      </div>
+    }
+
+    <!-- ============ SUCCESS ============ -->
+    @if (scanSuccess()) {
+      <div class="card success-card">
+        <div class="success-icon">&#10003;</div>
+        <h2>Document Received!</h2>
+        <p class="success-message">{{ scanMessage() }}</p>
+
+        <div class="success-details">
+          <div><strong>Received By:</strong> {{ receivedBy() }}</div>
+          <div><strong>Next Office:</strong> {{ nextOffice() || 'Routing Complete' }}</div>
+          <div><strong>Document:</strong> {{ doc.title }}</div>
+          <div><strong>Status:</strong>
+            <span class="badge" [ngClass]="getStatusClass(doc.status)">{{ doc.status }}</span>
+          </div>
+        </div>
+
+        <!-- Updated trail -->
+        <div class="trail">
+          <h4>Updated Routing Trail</h4>
+          @for (step of doc.routingTrail; track step.order) {
+            <div class="trail-step" [ngClass]="{'step-done': step.status === 'Received', 'step-active': step.status === 'Pending'}">
+              <span class="step-order">{{ step.order }}</span>
+              <div class="step-info">
+                <span class="step-office">{{ step.office }}</span>
+                <span class="badge badge-sm" [ngClass]="{'badge-success': step.status === 'Received', 'badge-warning': step.status === 'Pending', 'badge-default': step.status === 'Waiting'}">
+                  {{ step.status }}
+                </span>
+                @if (step.receivedAt) {
+                  <small>Received: {{ step.receivedAt | date:'short' }}</small>
+                }
+              </div>
+            </div>
+          }
+        </div>
+
+        <div class="success-actions">
+          <button class="btn btn-primary" (click)="resetAll()">Scan Next Document</button>
+          <a routerLink="/" class="btn">Back to Documents</a>
+        </div>
+      </div>
+    }
+  }
+</div>

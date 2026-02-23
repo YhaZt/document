@@ -1,0 +1,252 @@
+<div class="container">
+  <header class="header">
+    <h1>SUC Document Tracking System</h1>
+    <div class="header-actions">
+      <a routerLink="/scan" class="btn btn-success">Scan &amp; Receive</a>
+      <button class="btn btn-primary" (click)="showForm.set(!showForm())">
+        {{ showForm() ? 'Cancel' : '+ New Document' }}
+      </button>
+    </div>
+  </header>
+
+  <!-- ============ TRACK BY QR CODE ============ -->
+  <div class="card track-section">
+    <h2>Track Document</h2>
+    <div class="track-row">
+      <input
+        type="text"
+        placeholder="Enter tracking code (e.g. CARPEL-20260223-A3F7)"
+        [ngModel]="trackCode()"
+        (ngModelChange)="trackCode.set($event)"
+        (keyup.enter)="trackDocument()"
+      />
+      <button class="btn btn-primary" (click)="trackDocument()">Track</button>
+    </div>
+    @if (trackError()) {
+      <p class="error-text">{{ trackError() }}</p>
+    }
+    @if (trackedDoc(); as doc) {
+      <div class="tracked-result card">
+        <h3>{{ doc.title }}</h3>
+        <span class="badge" [ngClass]="getStatusClass(doc.status)">{{ doc.status }}</span>
+        <p><strong>Tracking Code:</strong> {{ doc.trackingCode }}</p>
+        <p><strong>Current Office:</strong> {{ doc.currentOffice || 'Completed' }}</p>
+        <div class="trail">
+          <h4>Routing Trail</h4>
+          @for (step of doc.routingTrail; track step.order) {
+            <div class="trail-step" [ngClass]="{'step-done': step.status === 'Received', 'step-active': step.status === 'Pending'}">
+              <span class="step-order">{{ step.order }}</span>
+              <span class="step-office">{{ step.office }}</span>
+              <span class="badge badge-sm" [ngClass]="{'badge-success': step.status === 'Received', 'badge-warning': step.status === 'Pending', 'badge-default': step.status === 'Waiting'}">{{ step.status }}</span>
+            </div>
+          }
+        </div>
+      </div>
+    }
+  </div>
+
+  <!-- ============ CREATE FORM ============ -->
+  @if (showForm()) {
+    <div class="card create-form">
+      <h2>New Document</h2>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Title *</label>
+          <input type="text" [ngModel]="formTitle()" (ngModelChange)="formTitle.set($event)" placeholder="Document title" />
+        </div>
+
+        <div class="form-group">
+          <label>Document Type</label>
+          <select [ngModel]="formDocumentType()" (ngModelChange)="formDocumentType.set($event)">
+            @for (t of documentTypes; track t) {
+              <option [value]="t">{{ t }}</option>
+            }
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Date</label>
+          <input type="date" [ngModel]="formDate()" (ngModelChange)="formDate.set($event)" />
+        </div>
+
+        <div class="form-group">
+          <label>Target Date</label>
+          <input type="date" [ngModel]="formTargetDate()" (ngModelChange)="formTargetDate.set($event)" />
+        </div>
+
+        <div class="form-group">
+          <label>Origin Office (came from) *</label>
+          <select [ngModel]="formOriginOffice()" (ngModelChange)="formOriginOffice.set($event)">
+            <option value="">-- Select Office --</option>
+            @for (o of offices(); track o) {
+              <option [value]="o">{{ o }}</option>
+            }
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Priority Level</label>
+          <select [ngModel]="formPriorityLevel()" (ngModelChange)="formPriorityLevel.set($event)">
+            @for (p of priorityLevels; track p) {
+              <option [value]="p">{{ p }}</option>
+            }
+          </select>
+        </div>
+      </div>
+
+      <div class="form-group full-width">
+        <label>Description</label>
+        <textarea rows="3" [ngModel]="formDescription()" (ngModelChange)="formDescription.set($event)" placeholder="Brief description of the document"></textarea>
+      </div>
+
+      <!-- Receiving offices selection -->
+      <div class="form-group full-width">
+        <label>Receiving Offices (click to add, drag to reorder) *</label>
+        <div class="office-picker">
+          @for (o of offices(); track o) {
+            <button
+              type="button"
+              class="chip"
+              [ngClass]="{'chip-selected': formSelectedOffices().includes(o)}"
+              (click)="toggleOffice(o)"
+            >{{ o }}</button>
+          }
+        </div>
+      </div>
+
+      @if (formSelectedOffices().length) {
+        <div class="form-group full-width">
+          <label>Office Routing Order</label>
+          <div class="routing-order">
+            @for (o of formSelectedOffices(); track o; let i = $index) {
+              <div class="route-item">
+                <span class="route-num">{{ i + 1 }}</span>
+                <span class="route-name">{{ o }}</span>
+                <button class="btn-icon" (click)="moveOffice(i, -1)" [disabled]="i === 0">&uarr;</button>
+                <button class="btn-icon" (click)="moveOffice(i, 1)" [disabled]="i === formSelectedOffices().length - 1">&darr;</button>
+                <button class="btn-icon btn-icon-danger" (click)="removeOffice(i)">&times;</button>
+              </div>
+            }
+          </div>
+        </div>
+      }
+
+      <div class="form-actions">
+        <button class="btn btn-primary" (click)="saveDocument()">Save &amp; Generate QR</button>
+        <button class="btn" (click)="resetForm()">Cancel</button>
+      </div>
+    </div>
+  }
+
+  <!-- ============ DOCUMENT LIST ============ -->
+  <div class="document-list">
+    <h2>Documents</h2>
+    @for (doc of documents(); track doc.id) {
+      <div class="card document-item" (click)="viewDocument(doc)">
+        <div class="doc-header">
+          <h3>{{ doc.title }}</h3>
+          <div class="doc-badges">
+            <span class="badge" [ngClass]="getStatusClass(doc.status)">{{ doc.status }}</span>
+            <span class="badge" [ngClass]="getPriorityClass(doc.priorityLevel)">{{ doc.priorityLevel }}</span>
+          </div>
+        </div>
+        <div class="doc-meta">
+          <span><strong>Code:</strong> {{ doc.trackingCode }}</span>
+          <span><strong>Type:</strong> {{ doc.documentType }}</span>
+          <span><strong>From:</strong> {{ doc.originOffice }}</span>
+          <span><strong>Current:</strong> {{ doc.currentOffice || 'Done' }}</span>
+          <span><strong>Date:</strong> {{ doc.date | date:'mediumDate' }}</span>
+        </div>
+      </div>
+    } @empty {
+      <p class="empty">No documents yet. Create one to get started!</p>
+    }
+  </div>
+
+  <!-- ============ DETAIL / QR VIEWER MODAL ============ -->
+  @if (viewingDoc(); as doc) {
+    <div class="overlay" (click)="closeViewer()">
+      <div class="modal" (click)="$event.stopPropagation()">
+        <button class="modal-close" (click)="closeViewer()">&times;</button>
+
+        <div class="modal-body">
+          <!-- QR Code -->
+          <div class="qr-section">
+            @if (doc.qrCode) {
+              <img [src]="doc.qrCode" alt="QR Code" class="qr-image" />
+              <p class="tracking-code">{{ doc.trackingCode }}</p>
+            } @else {
+              <div class="qr-voided">
+                <p>QR VOIDED</p>
+              </div>
+            }
+          </div>
+
+          <!-- Details -->
+          <div class="detail-section">
+            <h2>{{ doc.title }}</h2>
+            <div class="detail-badges">
+              <span class="badge" [ngClass]="getStatusClass(doc.status)">{{ doc.status }}</span>
+              <span class="badge" [ngClass]="getPriorityClass(doc.priorityLevel)">{{ doc.priorityLevel }}</span>
+              <span class="badge badge-default">{{ doc.documentType }}</span>
+            </div>
+
+            <div class="detail-grid">
+              <div><strong>Tracking Code</strong><span>{{ doc.trackingCode }}</span></div>
+              <div><strong>Date</strong><span>{{ doc.date | date:'mediumDate' }}</span></div>
+              <div><strong>Origin Office</strong><span>{{ doc.originOffice }}</span></div>
+              <div><strong>Current Office</strong><span>{{ doc.currentOffice || 'Completed' }}</span></div>
+              <div><strong>Target Date</strong><span>{{ doc.targetDate ? (doc.targetDate | date:'mediumDate') : 'N/A' }}</span></div>
+              <div><strong>Created</strong><span>{{ doc.createdAt | date:'medium' }}</span></div>
+            </div>
+
+            @if (doc.description) {
+              <div class="description-box">
+                <strong>Description</strong>
+                <p>{{ doc.description }}</p>
+              </div>
+            }
+
+            <!-- Routing Trail -->
+            <div class="trail">
+              <h3>Routing Trail</h3>
+              @for (step of doc.routingTrail; track step.order) {
+                <div class="trail-step" [ngClass]="{'step-done': step.status === 'Received', 'step-active': step.status === 'Pending'}">
+                  <span class="step-order">{{ step.order }}</span>
+                  <div class="step-info">
+                    <span class="step-office">{{ step.office }}</span>
+                    <span class="badge badge-sm" [ngClass]="{'badge-success': step.status === 'Received', 'badge-warning': step.status === 'Pending', 'badge-default': step.status === 'Waiting'}">{{ step.status }}</span>
+                    @if (step.receivedAt) {
+                      <small>Received: {{ step.receivedAt | date:'short' }}</small>
+                    }
+                    @if (step.remarks) {
+                      <small>Remarks: {{ step.remarks }}</small>
+                    }
+                  </div>
+                </div>
+              }
+            </div>
+
+            <!-- Actions -->
+            @if (!doc.isVoided && doc.currentOffice) {
+              <div class="forward-section">
+                <h3>Forward to Next Office</h3>
+                <input type="text" placeholder="Remarks (optional)" [ngModel]="forwardRemarks()" (ngModelChange)="forwardRemarks.set($event)" />
+                <button class="btn btn-primary" (click)="forwardDocument(doc)">Forward</button>
+              </div>
+            }
+
+            <div class="modal-actions">
+              @if (!doc.isVoided) {
+                <button class="btn btn-danger" (click)="voidDocument(doc)">Void QR</button>
+              }
+              <button class="btn btn-danger" (click)="deleteDocument(doc.id)">Delete</button>
+              <button class="btn" (click)="closeViewer()">Close</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  }
+</div>
