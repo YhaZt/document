@@ -191,7 +191,7 @@ select { background: #fff; }
 
 /* ========== QR Section ========== */
 .qr-section { text-align: center; }
-.qr-image { width: 200px; height: 200px; border: 2px solid #eee; border-radius: 8px; }
+.qr-image { width: 260px; height: auto; border: 2px solid #eee; border-radius: 8px; }
 .tracking-code { font-family: monospace; font-size: .9rem; letter-spacing: .5px; margin-top: .5rem; color: #333; }
 .qr-voided {
   width: 200px; height: 200px;

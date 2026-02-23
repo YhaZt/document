@@ -1,5 +1,6 @@
 const QRCode = require('qrcode');
 const { v4: uuidv4 } = require('uuid');
+const { createCanvas, loadImage } = require('canvas');
 
 // ---------- SUC Office list (configurable) ----------
 const SUC_OFFICES = [
@@ -51,6 +52,213 @@ function generateTrackingCode() {
   const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   const hex  = uuidv4().split('-')[0].toUpperCase().slice(0, 4);
   return `${name}-${date}-${hex}`;
+}
+
+/**
+ * Simple seeded PRNG (mulberry32) – deterministic per tracking code.
+ */
+function seededRNG(seed) {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) {
+    h = Math.imul(31, h) + seed.charCodeAt(i) | 0;
+  }
+  let t = (h >>> 0) + 0x6D2B79F5;
+  return function () {
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * Render text into a high-res module grid (boolean[][]).
+ * moduleSize=2 gives 2× resolution → smoother letters.
+ */
+function textToModuleGrid(text, fontSize, moduleSize) {
+  const tmpW = 600;
+  const tmpH = fontSize + 8;
+  const tmpCanvas = createCanvas(tmpW, tmpH);
+  const tmpCtx = tmpCanvas.getContext('2d');
+  tmpCtx.fillStyle = '#ffffff';
+  tmpCtx.fillRect(0, 0, tmpW, tmpH);
+  tmpCtx.fillStyle = '#000000';
+  tmpCtx.font = `bold ${fontSize}px "Arial Black", Impact, sans-serif`;
+  tmpCtx.textBaseline = 'top';
+  tmpCtx.textAlign = 'left';
+  tmpCtx.fillText(text, 2, 2);
+
+  const textPxW = Math.ceil(tmpCtx.measureText(text).width) + 4;
+  const textPxH = fontSize + 4;
+  const imgData = tmpCtx.getImageData(0, 0, textPxW, textPxH);
+
+  const cols = Math.ceil(textPxW / moduleSize);
+  const rows = Math.ceil(textPxH / moduleSize);
+  const grid = [];
+
+  for (let mr = 0; mr < rows; mr++) {
+    const row = [];
+    for (let mc = 0; mc < cols; mc++) {
+      let darkCount = 0;
+      let total = 0;
+      for (let dy = 0; dy < moduleSize; dy++) {
+        for (let dx = 0; dx < moduleSize; dx++) {
+          const px = mc * moduleSize + dx;
+          const py = mr * moduleSize + dy;
+          if (px < textPxW && py < textPxH) {
+            const idx = (py * textPxW + px) * 4;
+            if (imgData.data[idx] < 128) darkCount++;
+            total++;
+          }
+        }
+      }
+      row.push(darkCount > total * 0.35);
+    }
+    grid.push(row);
+  }
+  return { grid, cols, rows };
+}
+
+/**
+ * Generate QR with retro pixel-block "CARPEL" + "iBIBES" in center.
+ * White space around text filled with unique seeded QR-shade modules.
+ */
+async function generateQRWithOverlay(payload, trackingCode) {
+  // 1. Raw QR matrix
+  const qrData = QRCode.create(payload, { errorCorrectionLevel: 'L' });
+  const modules = qrData.modules;
+  const modCount = modules.size;          // e.g. 41, 45 …
+  const modPx = 10;                       // pixel size per module on canvas
+
+  const qrPx = modCount * modPx;
+  const pad = 24;
+  const bottomArea = 40;
+  const canvasW = qrPx + pad * 2;
+  const canvasH = qrPx + pad * 2 + bottomArea;
+
+  // Copy to mutable 2D grid
+  const grid = [];
+  for (let r = 0; r < modCount; r++) {
+    const row = [];
+    for (let c = 0; c < modCount; c++) {
+      row.push(modules.get(r, c) ? 1 : 0);
+    }
+    grid.push(row);
+  }
+
+  // 2. Render text to module grids (moduleSize=2 → higher resolution)
+  const nameMods  = textToModuleGrid('CARPEL', 18, 2);
+  const labelMods = textToModuleGrid('iBIBES', 14, 2);
+
+  // Layout: name on top, 1 module gap, label below
+  const gap = 1;
+  const blockRows = nameMods.rows + gap + labelMods.rows;
+  const blockCols = Math.max(nameMods.cols, labelMods.cols);
+
+  // Tight padding: 1 module border around text block
+  const padC = 1;
+  const padR = 1;
+  const totalCols = blockCols + padC * 2;
+  const totalRows = blockRows + padR * 2;
+  const startC = Math.floor((modCount - totalCols) / 2);
+  const startR = Math.floor((modCount - totalRows) / 2);
+
+  // 3. Fill cleared area with seeded random QR-shade modules (unique pattern)
+  const rand = seededRNG(trackingCode);
+  for (let r = 0; r < totalRows; r++) {
+    for (let c = 0; c < totalCols; c++) {
+      const gr = startR + r;
+      const gc = startC + c;
+      if (gr >= 0 && gr < modCount && gc >= 0 && gc < modCount) {
+        // ~30% chance dark module for background texture
+        grid[gr][gc] = rand() < 0.30 ? 1 : 0;
+      }
+    }
+  }
+
+  // 4. Stamp "CARPEL" text modules (with 1-module white outline for contrast)
+  const nameOffC = Math.floor((blockCols - nameMods.cols) / 2);
+  // First pass: clear a 1-module halo around each dark text module
+  for (let r = 0; r < nameMods.rows; r++) {
+    for (let c = 0; c < nameMods.cols; c++) {
+      if (nameMods.grid[r][c]) {
+        for (let dr = -1; dr <= 1; dr++) {
+          for (let dc = -1; dc <= 1; dc++) {
+            const gr = startR + padR + r + dr;
+            const gc = startC + padC + nameOffC + c + dc;
+            if (gr >= 0 && gr < modCount && gc >= 0 && gc < modCount) {
+              grid[gr][gc] = 0;
+            }
+          }
+        }
+      }
+    }
+  }
+  // Second pass: stamp dark text modules
+  for (let r = 0; r < nameMods.rows; r++) {
+    for (let c = 0; c < nameMods.cols; c++) {
+      if (nameMods.grid[r][c]) {
+        const gr = startR + padR + r;
+        const gc = startC + padC + nameOffC + c;
+        if (gr >= 0 && gr < modCount && gc >= 0 && gc < modCount) {
+          grid[gr][gc] = 1;
+        }
+      }
+    }
+  }
+
+  // 5. Stamp "iBIBES" with same halo technique
+  const labelOffC = Math.floor((blockCols - labelMods.cols) / 2);
+  const labelTopR = nameMods.rows + gap;
+  for (let r = 0; r < labelMods.rows; r++) {
+    for (let c = 0; c < labelMods.cols; c++) {
+      if (labelMods.grid[r][c]) {
+        for (let dr = -1; dr <= 1; dr++) {
+          for (let dc = -1; dc <= 1; dc++) {
+            const gr = startR + padR + labelTopR + r + dr;
+            const gc = startC + padC + labelOffC + c + dc;
+            if (gr >= 0 && gr < modCount && gc >= 0 && gc < modCount) {
+              grid[gr][gc] = 0;
+            }
+          }
+        }
+      }
+    }
+  }
+  for (let r = 0; r < labelMods.rows; r++) {
+    for (let c = 0; c < labelMods.cols; c++) {
+      if (labelMods.grid[r][c]) {
+        const gr = startR + padR + labelTopR + r;
+        const gc = startC + padC + labelOffC + c;
+        if (gr >= 0 && gr < modCount && gc >= 0 && gc < modCount) {
+          grid[gr][gc] = 1;
+        }
+      }
+    }
+  }
+
+  // 6. Render all modules as uniform square blocks
+  const canvas = createCanvas(canvasW, canvasH);
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvasW, canvasH);
+
+  for (let r = 0; r < modCount; r++) {
+    for (let c = 0; c < modCount; c++) {
+      ctx.fillStyle = grid[r][c] ? '#000000' : '#ffffff';
+      ctx.fillRect(pad + c * modPx, pad + r * modPx, modPx, modPx);
+    }
+  }
+
+  // 7. Tracking code below QR (plain text, outside)
+  ctx.fillStyle = '#333333';
+  ctx.font = 'bold 15px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(trackingCode, canvasW / 2, pad + qrPx + 22);
+
+  return canvas.toDataURL('image/png');
 }
 
 // ---------- In-memory store ----------
@@ -112,17 +320,13 @@ exports.create = async (req, res) => {
       remarks: '',
     }));
 
-    // Generate QR code as base-64 data-URL
+    // Generate QR code with name overlay in center
     const qrPayload = JSON.stringify({
       trackingCode,
       id: nextId,
       url: `http://localhost:3000/api/documents/track/${trackingCode}`,
     });
-    const qrDataUrl = await QRCode.toDataURL(qrPayload, {
-      errorCorrectionLevel: 'H',
-      width: 300,
-      margin: 2,
-    });
+    const qrDataUrl = await generateQRWithOverlay(qrPayload, trackingCode);
 
     const doc = {
       id: nextId++,
